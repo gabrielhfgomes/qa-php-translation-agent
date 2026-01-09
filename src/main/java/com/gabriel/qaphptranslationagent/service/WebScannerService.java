@@ -113,50 +113,53 @@ public class WebScannerService {
     }
 
     private List<PageElement> extractElements(Page page) {
-        // Dá um tempo extra para as animações dos menus que você clicou terminarem
         page.waitForTimeout(1000);
-
         List<PageElement> found = new ArrayList<>();
 
-        // Expandimos os seletores para garantir que peguemos textos dentro de itens de menu específicos
-        // Adicionamos 'p' e 'div' com critério de texto
-        Locator locators = page.locator("p, span, h1, h2, h3, h4, h5, h6, b, strong, a, button, li, label, .text-tertiary");
+        // Focamos em elementos que costumam ter texto de interface
+        Locator locators = page.locator("p, span, h1, h2, h3, h4, h5, h6, a, button, label, li, .text-tertiary");
 
         for (int i = 0; i < locators.count(); i++) {
             Locator item = locators.nth(i);
             String text = item.innerText().trim();
 
-            // Verificamos se tem texto e se não é um elemento "pai" gigante que contém outros textos
-            // (Isso evita pegar o header inteiro como uma única string)
-            if (!text.isEmpty() && text.length() < 500) {
+            // 1. Filtro de Relevância: Texto muito curto ou muito longo costuma ser ruído
+            if (text.length() < 2 || text.length() > 300) continue;
 
-                // Verificamos se o elemento tem o atributo data-translate
-                String currentKey = item.getAttribute("data-translate");
+            // 2. Filtro de Tradução: Se já tem data-translate, ignoramos (já está resolvido no código)
+            String currentKey = item.getAttribute("data-translate");
+            if (currentKey != null && !currentKey.isEmpty()) continue;
 
-                // Pegamos o XPath para o Agente saber onde o texto mora
-                String xpath = (String) item.evaluate("""
-                el => {
-                    const getPath = (element) => {
-                        if (element.id && element.id !== '') return `id("${element.id}")`;
-                        if (element === document.body) return element.tagName;
-                        let ix = 0;
-                        let siblings = element.parentNode.childNodes;
-                        for (let i = 0; i < siblings.length; i++) {
-                            let sibling = siblings[i];
-                            if (sibling === element) return getPath(element.parentNode) + '/' + element.tagName + '[' + (ix + 1) + ']';
-                            if (sibling.nodeType === 1 && sibling.tagName === element.tagName) ix++;
-                        }
-                    };
-                    return getPath(el);
-                }
-            """);
+            // 3. Filtro de Visibilidade Real: Evita pegar textos de scripts ou tags ocultas
+            if (!item.isVisible()) continue;
 
-                found.add(new PageElement(text, "xpath=" + xpath, currentKey));
+            String xpath = (String) item.evaluate("""
+            el => {
+                const getPath = (element) => {
+                    if (element.id && element.id !== '') return `id("${element.id}")`;
+                    if (element === document.body) return element.tagName;
+                    let ix = 0;
+                    let siblings = element.parentNode.childNodes;
+                    for (let i = 0; i < siblings.length; i++) {
+                        let sibling = siblings[i];
+                        if (sibling === element) return getPath(element.parentNode) + '/' + element.tagName + '[' + (ix + 1) + ']';
+                        if (sibling.nodeType === 1 && sibling.tagName === element.tagName) ix++;
+                    }
+                };
+                return getPath(el);
             }
+        """);
+
+            found.add(new PageElement(text, "xpath=" + xpath, currentKey));
         }
-        // Removemos duplicatas de texto que podem aparecer por causa de seletores sobrepostos (ex: span dentro de p)
+
+        // Mantemos apenas a versão mais específica (ex: se tiver um span dentro de um li, pegamos o span)
         return found.stream()
-                .collect(Collectors.toMap(PageElement::text, p -> p, (p1, p2) -> p1))
+                .collect(Collectors.toMap(
+                        PageElement::text,
+                        p -> p,
+                        (existing, replacement) -> existing.selector().length() > replacement.selector().length() ? existing : replacement
+                ))
                 .values().stream().toList();
     }
 }

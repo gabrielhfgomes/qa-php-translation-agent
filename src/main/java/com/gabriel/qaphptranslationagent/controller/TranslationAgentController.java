@@ -2,8 +2,11 @@ package com.gabriel.qaphptranslationagent.controller;
 
 import com.gabriel.qaphptranslationagent.model.PageElement;
 import com.gabriel.qaphptranslationagent.model.TranslationSuggestion;
+import com.gabriel.qaphptranslationagent.service.CodeRefactorService;
+import com.gabriel.qaphptranslationagent.service.TranslationStorageService;
 import com.gabriel.qaphptranslationagent.service.WebScannerService;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
 
@@ -19,9 +22,14 @@ public class TranslationAgentController {
 
     private final WebScannerService scannerService;
     private final ChatClient chatClient;
+    private final CodeRefactorService codeRefactorService;
+    private final TranslationStorageService translationStorageService;
 
     // No Spring AI moderno, injetamos o Builder para configurar o ChatClient
-    public TranslationAgentController(WebScannerService scannerService, ChatClient.Builder chatClientBuilder) {
+    public TranslationAgentController(WebScannerService scannerService,
+                                      ChatClient.Builder chatClientBuilder,
+                                      CodeRefactorService codeRefactorService,
+                                      TranslationStorageService translationStorageService) {
         this.scannerService = scannerService;
         // No construtor do seu Controller
         this.chatClient = chatClientBuilder
@@ -37,10 +45,13 @@ public class TranslationAgentController {
                 
                 REGRAS:
                 - Use chaves que descrevam o local do texto (ex: header.logout, menu.settings).
+                - As chaves devem ser simples, não coloque caracteres especiais e nem ponto seguidos de pontos
                 - Nunca use 'modulo.submodulo'.
                 - Se o texto já estiver em Português, ignore-o.
                 """)
                 .build();
+        this.codeRefactorService = codeRefactorService;
+        this.translationStorageService = translationStorageService;
     }
 
     @GetMapping("/scan-full")
@@ -72,5 +83,20 @@ public class TranslationAgentController {
                 // O .entity() faz o parse automático do JSON para sua lista de objetos
                 .call()
                 .entity(new ParameterizedTypeReference<List<TranslationSuggestion>>() {});
+    }
+
+
+    @PostMapping("/apply")
+    public ResponseEntity<String> apply(@RequestBody TranslationSuggestion sug) {
+        try {
+            // Altera o código fonte (.php)
+            codeRefactorService.injectDataTranslate(sug.originalText(), sug.suggestedKey());
+            // Altera os dicionários (.json)
+            translationStorageService.updateTranslations(sug.suggestedKey(), sug.translatedText(), sug.originalText());
+
+            return ResponseEntity.ok("O robô trabalhou com sucesso!");
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body("Erro: " + e.getMessage());
+        }
     }
 }
